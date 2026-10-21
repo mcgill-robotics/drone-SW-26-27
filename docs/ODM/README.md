@@ -29,10 +29,12 @@ https://pyodm.readthedocs.io/en/stable
 | `dem-resolution` | Height map resolution in cm/pixel | `5` |
 | `dem-gapfill-steps` | Controls how much ODM tries to fill in missing elevation data in the height map (without gapfill, there might be holes with no data in the map) | `3` |
 | `dem-decimation` | Reduce point count for faster DEM generation | `1` |
+
 Source: https://docs.opendronemap.org/arguments/dem-gapfill-steps/
 
 ## Example DSM
 <img width="606" height="312" alt="image" src="https://github.com/user-attachments/assets/f1906b1a-11e1-4d07-b1bd-411640063443" />
+
 To view the TIF file, use QGIS and go to “layer” and then click “add layer” and then click add raster layer. Then select the appropriate TIF file.
 
 ## General Flow of DSM Map Generation
@@ -50,4 +52,5 @@ To view the TIF file, use QGIS and go to “layer” and then click “add layer
   - Converts the surface elevations into a 2D raster grid.
   - Each pixel stores an elevation value.
   - Outputs `dsm.tif`.
+
 DSM map info (sources: https://github.com/OpenSfM/OpenSfM, https://opensfm.org/docs/using.html, https://github.com/cdcseacave/openMVS/blob/develop/docs/wiki/Interface.md)
