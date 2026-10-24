@@ -32,6 +32,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # Micro XRCE-DDS Agent: the bridge between PX4 and ROS 2 (replaces MAVROS).
 RUN git clone --depth 1 -b ${XRCE_AGENT_VERSION} https://github.com/eProsima/Micro-XRCE-DDS-Agent.git /tmp/xrce-agent \
+    && sed -i 's/set(_fastdds_tag 2.12.x)/set(_fastdds_tag v2.12.2)/' /tmp/xrce-agent/CMakeLists.txt \
     && cmake -S /tmp/xrce-agent -B /tmp/xrce-agent/build \
     && cmake --build /tmp/xrce-agent/build -j"$(nproc)" \
     && cmake --install /tmp/xrce-agent/build \
