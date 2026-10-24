@@ -1,1 +1,13 @@
 .ruff_cache
+
+# colcon build output
+build/
+install/
+log/
+
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+
+.DS_Store
