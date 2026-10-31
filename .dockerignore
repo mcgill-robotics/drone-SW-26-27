@@ -1,0 +1,9 @@
+# Files the Docker build never needs. Keeps the build context small
+# (colcon output alone is 100+ MB) and the build fast.
+build/
+install/
+log/
+flight_logs/
+.git/
+.vscode/
+**/__pycache__/
