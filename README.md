@@ -39,7 +39,10 @@ src/drone/                ROS 2 package with the core flight engine
 
   ```sh
   git clone -b v2.4.2 https://github.com/eProsima/Micro-XRCE-DDS-Agent.git
-  cd Micro-XRCE-DDS-Agent && mkdir build && cd build
+  cd Micro-XRCE-DDS-Agent
+  # v2.4.2 asks for Fast-DDS branch 2.12.x, which was deleted upstream; use the v2.12.2 tag
+  sed -i 's/set(_fastdds_tag 2.12.x)/set(_fastdds_tag v2.12.2)/' CMakeLists.txt
+  mkdir build && cd build
   cmake .. && make && sudo make install && sudo ldconfig /usr/local/lib/
   ```
 
