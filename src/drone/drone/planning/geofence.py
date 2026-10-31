@@ -43,9 +43,7 @@ class BufferedGeofence:
         Initialize with a sequence of ENU (x_east, y_north) coordinates in metres.
         """
         if len(polygon_enu) < 3:
-            raise ValueError(
-                f"Geofence requires >= 3 points, got {len(polygon_enu)}"
-            )
+            raise ValueError(f"Geofence requires >= 3 points, got {len(polygon_enu)}")
 
         self.buffer_m = float(buffer_m)
         self.vert_buffer_m = float(vert_buffer_m)
@@ -158,9 +156,7 @@ class BufferedGeofence:
     # Target Point Clamping & Staging
     # -------------------------------------------------------------------------
 
-    def clamp_target_to_safe_boundary(
-        self, x: float, y: float
-    ) -> tuple[float, float]:
+    def clamp_target_to_safe_boundary(self, x: float, y: float) -> tuple[float, float]:
         """
         If (x, y) is inside the safe boundary, returns (x, y) unchanged.
         If (x, y) lies inside the buffer margin or outside entirely, projects
@@ -210,9 +206,7 @@ class BufferedGeofence:
     # Reflex Vertex Extraction (Turning Points around Concave Indentations)
     # -------------------------------------------------------------------------
 
-    def get_reflex_vertices(
-        self, nudge_m: float = 0.0
-    ) -> list[tuple[float, float]]:
+    def get_reflex_vertices(self, nudge_m: float = 0.0) -> list[tuple[float, float]]:
         """
         Find all reflex vertices of the safe buffered polygon.
         In a counter-clockwise oriented polygon, a reflex vertex turns clockwise

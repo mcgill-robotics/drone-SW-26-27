@@ -17,6 +17,9 @@ No ROS 2 imports required; runs anywhere with pytest.
 import math
 import pytest
 
+# Skip this test suite gracefully if shapely is not installed in the environment
+pytest.importorskip("shapely")
+
 from drone.planning.coordinates import (
     distance_3d,
     enu_to_wgs84,
@@ -237,9 +240,7 @@ def test_staging_target_creation(concave_u_geofence):
     """Targets in the buffer margin generate a staging waypoint and require creep mode."""
     fence = concave_u_geofence
 
-    staged_pt, speed, requires_creep = fence.create_staging_target(
-        -15.0, 1.0, 10.0
-    )
+    staged_pt, speed, requires_creep = fence.create_staging_target(-15.0, 1.0, 10.0)
     assert requires_creep is True
     assert speed == 0.3  # Crawl speed
     assert abs(staged_pt[1] - 2.0) < 0.1  # Staged on the safe line
@@ -321,4 +322,3 @@ def test_straight_vertical_descent(concave_u_geofence):
     # X and Y remain unchanged
     assert path[0][0] == path[1][0]
     assert path[0][1] == path[1][1]
-

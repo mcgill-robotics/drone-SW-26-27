@@ -32,7 +32,9 @@ SETPOINT_RATE_HZ = 10
 WAYPOINT_TIMEOUT_S = 60
 
 
-def create_default_concave_fence(origin_x: float, origin_y: float) -> list[tuple[float, float]]:
+def create_default_concave_fence(
+    origin_x: float, origin_y: float
+) -> list[tuple[float, float]]:
     """
     Generate a 40m x 40m concave arena centered around (origin_x, origin_y) in ENU.
     Features a 15m deep concave cutout in the center that blocks direct straight-line flight.
@@ -43,8 +45,8 @@ def create_default_concave_fence(origin_x: float, origin_y: float) -> list[tuple
         (ox + 20.0, oy - 20.0),
         (ox + 20.0, oy + 20.0),
         (ox + 5.0, oy + 20.0),
-        (ox + 5.0, oy + 2.0),   # Inner right reflex corner
-        (ox - 5.0, oy + 2.0),   # Inner left reflex corner
+        (ox + 5.0, oy + 2.0),  # Inner right reflex corner
+        (ox - 5.0, oy + 2.0),  # Inner left reflex corner
         (ox - 5.0, oy + 20.0),
         (ox - 20.0, oy + 20.0),
     ]
@@ -76,7 +78,9 @@ def check(px4, args):
     drone_x = current_loc["x"]
     drone_y = current_loc["y"]
     drone_z = current_loc["z"]
-    print(f"[CHECK] Current local ENU: x={drone_x:.2f}, y={drone_y:.2f}, z={drone_z:.2f}")
+    print(
+        f"[CHECK] Current local ENU: x={drone_x:.2f}, y={drone_y:.2f}, z={drone_z:.2f}"
+    )
 
     # Load or generate concave geofence
     if args.fence:
@@ -118,7 +122,9 @@ def check(px4, args):
     # Fly through waypoints sequentially
     dt = 1.0 / SETPOINT_RATE_HZ
     for idx, (tx, ty, tz) in enumerate(waypoints):
-        print(f"\n[CHECK] Flying to Waypoint {idx + 1}/{len(waypoints)}: ({tx:.2f}, {ty:.2f}, {tz:.2f})")
+        print(
+            f"\n[CHECK] Flying to Waypoint {idx + 1}/{len(waypoints)}: ({tx:.2f}, {ty:.2f}, {tz:.2f})"
+        )
         leg_start = time.time()
         last_log = 0.0
 
@@ -181,4 +187,3 @@ def main():
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

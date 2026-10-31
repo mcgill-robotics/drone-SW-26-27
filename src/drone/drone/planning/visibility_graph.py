@@ -119,9 +119,7 @@ class VisibilityGraphPlanner:
         num_nodes = len(nodes)
 
         # Adjacency list: node_idx -> list of (neighbor_idx, distance)
-        graph: dict[int, list[tuple[int, float]]] = {
-            i: [] for i in range(num_nodes)
-        }
+        graph: dict[int, list[tuple[int, float]]] = {i: [] for i in range(num_nodes)}
 
         for i in range(num_nodes):
             for j in range(i + 1, num_nodes):
@@ -140,9 +138,7 @@ class VisibilityGraphPlanner:
         heapq.heappush(
             pq,
             (
-                horizontal_distance(
-                    start_2d[0], start_2d[1], goal_2d[0], goal_2d[1]
-                ),
+                horizontal_distance(start_2d[0], start_2d[1], goal_2d[0], goal_2d[1]),
                 start_idx,
             ),
         )

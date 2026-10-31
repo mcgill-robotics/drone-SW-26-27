@@ -142,9 +142,7 @@ def load_geofence(
         if source.get("type") in ("Feature", "Polygon"):
             return load_from_geojson(source)
         if "coordinates" in source:
-            coords = [
-                (float(pt[0]), float(pt[1])) for pt in source["coordinates"]
-            ]
+            coords = [(float(pt[0]), float(pt[1])) for pt in source["coordinates"]]
             return GeofenceDefinition(
                 polygon_wgs84=coords,
                 height_max=float(source.get("height_max", height_max)),
@@ -155,12 +153,9 @@ def load_geofence(
         # List of coordinates [(lat, lon), ...]
         coords = [(float(pt[0]), float(pt[1])) for pt in source if len(pt) >= 2]
         if len(coords) < 3:
-            raise ValueError(
-                f"Geofence requires at least 3 points, got {len(coords)}"
-            )
+            raise ValueError(f"Geofence requires at least 3 points, got {len(coords)}")
         return GeofenceDefinition(
             polygon_wgs84=coords, height_max=height_max, height_min=height_min
         )
 
     raise ValueError(f"Unsupported geofence source format: {type(source)}")
-
