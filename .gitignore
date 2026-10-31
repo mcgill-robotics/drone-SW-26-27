@@ -11,3 +11,6 @@ __pycache__/
 .pytest_cache/
 
 .DS_Store
+
+# Telemetry CSVs written by check_movement
+flight_logs/
