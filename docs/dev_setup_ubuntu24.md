@@ -131,7 +131,7 @@ SITL parameter changed: `NAV_DLL_ACT 0` (see below).
 - **`ERROR [uxrce_dds_client] No ping response, disconnecting` after each check is
   expected.** Every check starts its own agent and stops it on exit; the PX4 client
   then reconnects automatically when the next check starts its agent.
-- **`home_position_v1` is not always received before arming.** In testing, `check_link`
+- - **`home_position_v1` is not always received before arming.** In testing, `check_link`
   received it, but a later `check_telemetry` run reported NO DATA, and `check_arm`
   showed `Home Set: No` until arming (PX4 republishes home when it arms). Root cause
   not confirmed. Code that needs home should wait for it with a timeout, or read it
