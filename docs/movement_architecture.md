@@ -1,5 +1,7 @@
 # Movement architecture (issue #27)
 
+ros2 run drone check_movement --sitl --api
+
 How the companion-computer code reaches PX4 in simulation, which file does what, and what issue #27 (basic drone movement) added. Verified in SITL on 2026-10-31: all 12 mission steps passed, 25 unit tests pass without ROS.
 
 Colours: **blue** = new for #27 · **white** = existing team code · **grey** = third-party · **orange dashed** = not used yet.
