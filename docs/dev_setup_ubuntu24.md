@@ -131,15 +131,25 @@ SITL parameter changed: `NAV_DLL_ACT 0` (see below).
 - **`ERROR [uxrce_dds_client] No ping response, disconnecting` after each check is
   expected.** Every check starts its own agent and stops it on exit; the PX4 client
   then reconnects automatically when the next check starts its agent.
-- - **`home_position_v1` is not always received before arming.** In testing, `check_link`
-  received it, but a later `check_telemetry` run reported NO DATA, and `check_arm`
-  showed `Home Set: No` until arming (PX4 republishes home when it arms). Root cause
-  not confirmed. Code that needs home should wait for it with a timeout, or read it
-  after arming, rather than assume it is available at startup.
-- **Takeoff completes within a tolerance of the target**, `max(0.3 m, 5% of the
-  climb)` (`offboard.py: takeoff()`), so a 3 m takeoff finishes at ≥ 2.7 m (2.71 m
-  observed). Ground altitude after landing reads about -0.08 m; this is normal
-  estimator offset.
+- **`home_position_v1` arrives only on the first connection after PX4 boots, and on
+  arming.** PX4's DDS client subscribes to each uORB topic once per boot and forwards
+  it only when it changes; the DDS writer keeps no history. Home changes rarely (set at
+  boot, updated on arming and takeoff), so the first check after PX4 starts receives
+  it and later checks see NO DATA until the drone arms. Confirmed in PX4 1.17 source
+  (`uxrce_dds_client/dds_topics.h.em`) and by connecting twice in a row in SITL.
+  Code that needs home should call `px4.wait_for_home()` after arming; `check_arm`
+  prints home after arming.
+- **`takeoff()` returns within a tolerance of the target**, `max(0.3 m, 5% of the
+  climb)` (`offboard.py`), so a 3 m takeoff returns at ≥ 2.7 m. The drone keeps
+  climbing to the full target afterwards, because the target stays in the heartbeat.
+- **`land()` waits for PX4's land detector**, not for altitude near 0. Altitude is
+  relative to where the estimator started (about -0.08 m after landing is normal
+  drift), and in SITL "z < 0.1 m" was true 19 s before PX4 confirmed touchdown and
+  disarmed.
+- **Landing confirmation is slow when the host is overloaded.** On the Jetson with
+  QGroundControl and the Gazebo window open (load average 15 on 6 cores), PX4 took
+  17 s to over 60 s to confirm touchdown; with both closed, 5 s. Open them only when
+  you need to watch.
 
 
 ## Troubleshooting
@@ -150,3 +160,4 @@ SITL parameter changed: `NAV_DLL_ACT 0` (see below).
 | Agent connects to the wrong PX4, or ports already in use | Another simulator (e.g. a different SITL stack) is holding UDP 8888 / 14550. Stop it first (`docker ps`) |
 | `colcon build` or `ros2 run` fails with odd Python errors | A conda/venv Python is active. `conda deactivate`; only `/opt/ros/humble/setup.bash` should be sourced |
 | `vehicle_imu ... timestamp error` scrolling continuously | Simulation can't keep up. Try `HEADLESS=1 make px4_sitl gz_x500` |
+| `Landing timeout` although the drone is on the ground | Host overloaded, so PX4's land detector is slow. Close QGroundControl and the Gazebo window (`top` shows the load) |
