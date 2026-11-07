@@ -15,9 +15,8 @@ States:
                        +--a command failed / timed out--> FAILED
                        +--Ctrl+C or abort()-------------> ABORTED
 
-On FAILED or ABORTED the executor tells PX4 to hold the current position, so the
-drone stops where it is instead of continuing toward a target. Landing is then up
-to the caller.
+On FAILED or ABORTED the executor requests position hold. A failed request is
+reported; it does not guarantee the drone stopped. Landing is up to the caller.
 """
 
 import time
@@ -54,6 +53,7 @@ class MissionContext:
     """Shared between commands: the last position target that was commanded."""
 
     last_target: tuple = None
+    last_yaw: float = None  # Explicit ENU heading retained by position commands.
 
 
 @dataclass
@@ -112,7 +112,17 @@ class MissionExecutor:
                 print(f"[MISSION] ({index}/{total}) {command.label}")
                 if self.logger is not None:
                     self.logger.set_label(command.label)
-                result = self._run_one(command)
+                started = self.clock()
+                try:
+                    result = self._run_one(command)
+                except Exception as exc:
+                    # A broken command must stop the mission just like a timeout.
+                    result = CommandResult(
+                        command.label,
+                        CommandStatus.FAILED,
+                        self.clock() - started,
+                        f"{type(exc).__name__}: {exc}",
+                    )
                 self.results.append(result)
                 if result.status is not CommandStatus.DONE:
                     print(f"[MISSION] ✗ {command.label}: {result.reason}")
@@ -129,9 +139,18 @@ class MissionExecutor:
             self._stop_here()
             self._set_state(MissionState.ABORTED)
             raise
+        except Exception as exc:
+            # Recover from failures outside command execution too, e.g. logging.
+            print(f"[MISSION] Failed: {type(exc).__name__}: {exc}")
+            self._stop_here()
+            self._set_state(MissionState.FAILED)
+            return False
         finally:
             if self.logger is not None:
-                self.logger.set_label("")
+                try:
+                    self.logger.set_label("")
+                except Exception as exc:
+                    print(f"[MISSION][WARN] Could not clear log label: {exc}")
         self._set_state(MissionState.COMPLETED)
         return True
 
@@ -159,8 +178,12 @@ class MissionExecutor:
 
     def _stop_here(self):
         """Stop moving: hold wherever the drone is right now."""
-        if not self.px4.hold_current_position():
-            print("[MISSION][WARN] Could not send hold-position setpoint")
+        # Recovery errors must not hide the original failure or prevent landing.
+        try:
+            if not self.px4.hold_current_position():
+                print("[MISSION][WARN] Could not send hold-position setpoint")
+        except Exception as exc:
+            print(f"[MISSION][WARN] Hold failed: {type(exc).__name__}: {exc}")
 
     def summary(self):
         """One line per command, for printing at the end of a flight."""

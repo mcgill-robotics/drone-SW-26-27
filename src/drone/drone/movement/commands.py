@@ -20,6 +20,8 @@ where the drone happened to stop. This stops small errors from piling up over a
 long mission (e.g. a square ends where it started).
 """
 
+import math
+
 from abc import ABC, abstractmethod
 from enum import Enum
 
@@ -76,9 +78,23 @@ class PositionCommand(MovementCommand):
     """
 
     def __init__(
-        self, timeout=30.0, label=None, tolerance=None, settle_speed=SETTLE_SPEED_MPS
+        self,
+        timeout=30.0,
+        label=None,
+        tolerance=None,
+        settle_speed=SETTLE_SPEED_MPS,
+        yaw=None,
+        yaw_tolerance=math.radians(5),
     ):
         super().__init__(timeout=timeout, label=label)
+        # Explicit headings are radians in ENU: East=0, North=pi/2.
+        if yaw is not None and not math.isfinite(yaw):
+            raise ValueError("yaw must be finite")
+        if not math.isfinite(yaw_tolerance) or not 0 < yaw_tolerance <= math.pi:
+            raise ValueError("yaw_tolerance must be in (0, pi] radians")
+        self.yaw = yaw
+        self.yaw_tolerance = yaw_tolerance
+        self.target_yaw = None
         self.fixed_tolerance = tolerance
         self.settle_speed = settle_speed
         self.target = None
@@ -120,10 +136,14 @@ class PositionCommand(MovementCommand):
             else geometry.arrival_tolerance(geometry.distance(start_point, target))
         )
         self.started_at = now
-        if not px4.send_position_setpoint(*target):
+        # Keep a requested camera heading across subsequent position moves.
+        self.target_yaw = self.yaw if self.yaw is not None else context.last_yaw
+        yaw_options = {} if self.target_yaw is None else {"yaw": self.target_yaw}
+        if not px4.send_position_setpoint(*target, **yaw_options):
             self.fail("position setpoint was not sent")
             return False
         context.last_target = target
+        context.last_yaw = self.target_yaw
         return True
 
     def update(self, px4, context, now):
@@ -132,12 +152,48 @@ class PositionCommand(MovementCommand):
             return self.fail("lost local position")
         close_enough = geometry.reached(current, self.target, self.tolerance)
         slow_enough = geometry.speed(px4.get_velocity()) <= self.settle_speed
-        if close_enough and slow_enough:
+        yaw_error = None
+        if self.target_yaw is not None:
+            heading = px4.get_current_yaw()
+            if heading is None or not math.isfinite(heading):
+                return self.fail("heading unavailable")
+            # Wrapped error makes +179 degrees and -179 degrees only 2 degrees apart.
+            yaw_error = abs(
+                math.atan2(
+                    math.sin(self.target_yaw - heading),
+                    math.cos(self.target_yaw - heading),
+                )
+            )
+        facing_target = yaw_error is None or yaw_error <= self.yaw_tolerance
+        if close_enough and slow_enough and facing_target:
             return CommandStatus.DONE
         if now - self.started_at > self.timeout:
             left = geometry.distance(current, self.target)
-            return self.fail(f"timed out {left:.2f} m from target")
+            detail = (
+                ""
+                if yaw_error is None
+                else f", yaw error {math.degrees(yaw_error):.1f} deg"
+            )
+            return self.fail(f"timed out {left:.2f} m from target{detail}")
         return CommandStatus.RUNNING
+
+
+class RotateTo(PositionCommand):
+    """Face an absolute ENU yaw while holding the last target (or current position).
+
+    Example: RotateTo(math.pi / 2) faces North before a camera capture.
+    Completion checks heading and translational speed, not angular settling.
+    """
+
+    def __init__(self, yaw, **kwargs):
+        kwargs.setdefault("label", f"RotateTo({math.degrees(yaw):.1f} deg)")
+        super().__init__(yaw=yaw, **kwargs)
+
+    def default_label(self):
+        return "RotateTo"
+
+    def resolve_target(self, px4, start_point):
+        return start_point
 
 
 class GoTo(PositionCommand):
@@ -205,7 +261,8 @@ class Hold(MovementCommand):
     def start(self, px4, context, now):
         self.started_at = now
         if context.last_target is not None:
-            sent = px4.send_position_setpoint(*context.last_target)
+            yaw_options = {} if context.last_yaw is None else {"yaw": context.last_yaw}
+            sent = px4.send_position_setpoint(*context.last_target, **yaw_options)
         else:
             sent = px4.hold_current_position()
             loc = px4.get_location()
@@ -261,7 +318,17 @@ class FlyVelocity(MovementCommand):
         if now - self.started_at < self.seconds:
             return CommandStatus.RUNNING
         loc = px4.get_location()
-        if loc is None or not px4.hold_current_position():
+        # Preserve a camera heading when switching back from velocity control.
+        if loc is None:
+            return self.fail("could not switch back to position hold")
+        sent = (
+            px4.hold_current_position()
+            if context.last_yaw is None
+            else px4.send_position_setpoint(
+                *geometry.as_tuple(loc), yaw=context.last_yaw
+            )
+        )
+        if not sent:
             return self.fail("could not switch back to position hold")
         # Relative moves after this chain from where the drone actually stopped
         context.last_target = geometry.as_tuple(loc)
