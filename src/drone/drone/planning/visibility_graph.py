@@ -1,9 +1,17 @@
 """
 Deterministic shortest-path planner around concave geofences using a 2D Visibility Graph.
 
-Builds a line-of-sight graph between Start, Goal, and the reflex vertices of the
-inward-buffered safe geofence. Solves with A* using Euclidean distance heuristic.
-Returns an ordered sequence of 3D ENU waypoints guaranteed to remain inside safe airspace.
+Role in Pipeline (Step 3):
+  Takes a `BufferedGeofence` (from `geofence.py`) and computes the shortest safe 3D route
+  from `start` to `goal`:
+    1. Calls `geofence.clamp_target_to_safe_boundary()` and `geofence.clamp_altitude()`
+       so Start and Goal are guaranteed to be inside the safe zone.
+    2. Checks `is_line_of_sight_clear(start, goal)` — if a straight line stays inside
+       `geofence.safe_polygon`, returns `[start, goal]` immediately.
+    3. Otherwise, asks `geofence.get_reflex_vertices()` for all inward-dent turning corners,
+       connects all pairs of nodes `[Start, Goal, *reflex_corners]` that can "see" each
+       other without crossing the fence wall, and runs A* search to find the shortest
+       chain of waypoints.
 """
 
 import heapq
@@ -27,10 +35,16 @@ class VisibilityGraphPlanner:
         vertex_nudge_m: float = 0.3,
     ):
         """
-        Args:
-            geofence: BufferedGeofence instance defining the safe flight envelope.
-            vertex_nudge_m: Distance to nudge reflex vertices inward into the safe zone
-                           so the drone's turn does not skim the buffer line.
+        Initialize the planner with a `BufferedGeofence`.
+
+        Input:
+            geofence (BufferedGeofence): The inward-buffered ENU geofence from `geofence.py`.
+            vertex_nudge_m (float): Extra clearance in metres (default `0.3` m) passed to
+                `geofence.get_reflex_vertices(nudge_m=...)` so turning waypoints sit slightly
+                inside the safe boundary rather than directly on the corner.
+
+        Output:
+            None
         """
         self.geofence = geofence
         self.vertex_nudge_m = float(vertex_nudge_m)
@@ -39,15 +53,24 @@ class VisibilityGraphPlanner:
         self, p1: tuple[float, float], p2: tuple[float, float]
     ) -> bool:
         """
-        Test if the straight line segment between p1 and p2 lies strictly within
-        the safe flight polygon without intersecting any concave boundary indentations.
+        Check whether the drone can fly in a straight 2D line from `p1` to `p2` without
+        stepping outside `self.geofence.safe_polygon` (i.e., without cutting across a
+        concave dent in the fence).
+
+        Input:
+            p1 (tuple[float, float]): Start 2D point `(x_east, y_north)` in metres.
+            p2 (tuple[float, float]): End 2D point `(x_east, y_north)` in metres.
+
+        Output:
+            bool: `True` if the straight line segment `[p1, p2]` stays completely inside
+            the safe polygon; `False` if it crosses out of bounds.
         """
         if p1 == p2:
             return True
 
         line = LineString([p1, p2])
 
-        # Buffer safe polygon slightly (1mm) to handle floating-point boundary touching
+        # Buffer safe polygon slightly (5mm) to handle floating-point boundary touching
         expanded_safe = self.geofence.safe_polygon.buffer(0.005)
 
         if not expanded_safe.contains(line):
@@ -89,14 +112,25 @@ class VisibilityGraphPlanner:
         goal: tuple[float, float, float],
     ) -> list[tuple[float, float, float]]:
         """
-        Plan the shortest path from start to goal in Local ENU coordinates (metres).
+        Plan the shortest collision-free 3D path from `start` to `goal` in Local ENU metres.
 
-        Args:
-            start: (x, y, z) start position in ENU metres.
-            goal: (x, y, z) goal position in ENU metres.
+        How it works step-by-step:
+          1. Clamps `start` and `goal` into the safe 3D geofence using `self.geofence`.
+          2. If `is_line_of_sight_clear(start_2d, goal_2d)` is True, returns the 2-point
+             direct line `[start, goal]`.
+          3. Otherwise, fetches concave turning points via `self.geofence.get_reflex_vertices()`,
+             builds a graph connecting every pair of points with clear line-of-sight, and runs
+             A* search to find the shortest 2D detour around the fence dents.
+          4. Smoothly interpolates altitude `z` from `start_z` to `goal_z` along the path.
 
-        Returns:
-            List of (x, y, z) waypoints forming the shortest collision-free route.
+        Input:
+            start (tuple[float, float, float]): Starting `(x_east, y_north, z_up)` in ENU metres.
+            goal (tuple[float, float, float]): Target `(x_east, y_north, z_up)` in ENU metres.
+
+        Output:
+            list[tuple[float, float, float]]: Ordered list of 3D waypoints
+            `[(x0, y0, z0), (x1, y1, z1), ..., (xN, yN, zN)]` in ENU metres ready to send
+            to `px4.send_position_setpoint(x, y, z)`.
         """
         start_z = self.geofence.clamp_altitude(start[2])
         goal_z = self.geofence.clamp_altitude(goal[2])

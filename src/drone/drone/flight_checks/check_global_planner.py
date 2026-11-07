@@ -1,12 +1,17 @@
 """
 Global planner flight check: navigate safely around a concave geofence in OFFBOARD mode.
 
-Demonstrates the Global Planning Layer:
-  1. Takes off to cruise altitude.
-  2. Sets up a concave "horseshoe" geofence surrounding the flight area.
-  3. Plans a collision-free path across the concave indentation using the Visibility Graph.
-  4. Sequentially follows each waypoint in Local ENU space at 10 Hz.
-  5. Lands safely after reaching the destination.
+Role in Pipeline (Step 4 — Execution / Orchestrator):
+  Wires all modules in `drone.planning` together with the PX4 ROS 2 flight controller:
+    1. Takes off to cruise altitude and reads the drone's current ENU & GPS position.
+    2. Loads a `.plan` file via `load_geofence()` -> converts it to ENU via
+       `BufferedGeofence.from_wgs84()` (or builds a default U-shaped ENU fence via
+       `create_default_concave_fence()`).
+    3. Passes the `BufferedGeofence` into `VisibilityGraphPlanner(geofence)` and calls
+       `planner.plan_path(start, goal)` to get a list of 3D ENU waypoints around the dent.
+    4. Loops over each `(tx, ty, tz)` waypoint, streaming `px4.send_position_setpoint()`
+       at 10 Hz and checking `distance_3d()` until the drone arrives within 1.0 m.
+    5. Lands safely after reaching the final waypoint.
 
 Example:
     ros2 run drone check_global_planner --sitl --api --alt 10 --buffer 2.0
@@ -36,8 +41,18 @@ def create_default_concave_fence(
     origin_x: float, origin_y: float
 ) -> list[tuple[float, float]]:
     """
-    Generate a 40m x 40m concave arena centered around (origin_x, origin_y) in ENU.
-    Features a 15m deep concave cutout in the center that blocks direct straight-line flight.
+    Generate a 40m x 40m U-shaped ("horseshoe") concave polygon centered around
+    `(origin_x, origin_y)` in Local ENU metres. Features an 18m-deep inward dent in
+    the top edge (`y = +20` down to `y = +2`) that blocks straight-line flight between
+    the left wing and right wing.
+
+    Input:
+        origin_x (float): Center East coordinate in metres (usually the drone's X position).
+        origin_y (float): Center North coordinate in metres (usually the drone's Y position).
+
+    Output:
+        list[tuple[float, float]]: 8 `(x_east, y_north)` corner tuples in metres, ready
+        to pass into `BufferedGeofence(polygon_enu=...)`.
     """
     ox, oy = origin_x, origin_y
     return [
@@ -52,7 +67,20 @@ def create_default_concave_fence(
     ]
 
 
-def check(px4, args):
+def check(px4, args) -> bool:
+    """
+    Execute the end-to-end global planner flight check on the PX4 node.
+
+    Input:
+        px4 (Px4Node): Active ROS 2 PX4 interface providing telemetry (`get_location`,
+            `get_gps_location`) and control (`takeoff`, `send_position_setpoint`, `land`).
+        args (argparse.Namespace): Parsed CLI flags (`--fence`, `--alt`, `--buffer`,
+            `--sitl`, `--api`).
+
+    Output:
+        bool: `True` if takeoff, concave path planning, waypoint navigation, and landing
+        all succeeded; `False` if any stage failed or timed out.
+    """
     if not enter_offboard(px4):
         return False
     if not arm(px4, args):
@@ -159,7 +187,16 @@ def check(px4, args):
     return px4.land(timeout=60)
 
 
-def main():
+def main() -> int:
+    """
+    CLI entry-point for `ros2 run drone check_global_planner`.
+
+    Input:
+        None (reads command-line arguments from `sys.argv`).
+
+    Output:
+        int: Process exit code (`0` on success, `1` on check failure, `2` if arming disallowed).
+    """
     parser = build_parser(__doc__, api_arm=True)
     parser.add_argument(
         "--fence",

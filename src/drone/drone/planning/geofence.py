@@ -1,10 +1,18 @@
 """
 Inward-buffered geofence management and spatial validation.
 
-Converts geofence polygons into Local ENU space, calculates inward safety buffers
-using shapely (Minkowski difference), extracts reflex turning vertices for concave
-boundaries, clamps out-of-boundary / buffer-penetrating targets, and enforces
-altitude ceilings.
+Role in Pipeline (Step 2):
+  Takes a geofence (either directly in ENU metres, or from `GeofenceDefinition` via
+  `from_wgs84()`) and creates two 2D Shapely polygons in Local ENU metres:
+    1. `raw_polygon`  : The actual legal competition boundary (0m line).
+    2. `safe_polygon` : The legal boundary shrunk inward by `buffer_m` (e.g., 2.0m).
+
+  It then provides three core services to `VisibilityGraphPlanner`:
+    - Containment checks: Is a 2D/3D point inside the safe zone?
+    - Clamping: If a Start or Goal point is outside the safe zone, snap it to the
+      nearest point on the `safe_polygon` perimeter.
+    - Reflex Vertex Extraction: Find all "inward-sticking" corners (dents in a concave
+      fence) that block straight-line flight, so the path planner knows where to turn.
 """
 
 import math
@@ -25,10 +33,14 @@ CRAWL_SPEED_MPS = 0.3
 
 class BufferedGeofence:
     """
-    Manages an inward-buffered geofence in local ENU Cartesian coordinates.
+    Manages an inward-buffered geofence in local ENU Cartesian coordinates (metres).
 
-    The raw polygon represents the hard legal perimeter (0m line).
-    The safe polygon represents the flight corridor contracted inward by buffer_m.
+    Mental Model:
+      - `raw_polygon` is the hard legal wall. Crossing it disqualifies the drone.
+      - `safe_polygon` is `raw_polygon` shrunk inward by `buffer_m` (default 2m) on all
+        sides using Shapely's negative buffer (`raw_polygon.buffer(-buffer_m)`).
+      - As long as the drone's center stays inside `safe_polygon`, the drone is at least
+        `buffer_m` away from the legal wall.
     """
 
     def __init__(
@@ -40,7 +52,20 @@ class BufferedGeofence:
         vert_buffer_m: float = DEFAULT_VERT_BUFFER_M,
     ):
         """
-        Initialize with a sequence of ENU (x_east, y_north) coordinates in metres.
+        Build the raw and inward-shrunk safe polygons from 2D ENU coordinates.
+
+        Input:
+            polygon_enu (list[tuple[float, float]]): List of `(x_east, y_north)` vertices
+                in metres (must have >= 3 points).
+            buffer_m (float): Horizontal safety margin in metres to shrink the fence inward.
+            height_max (float): Raw maximum altitude ceiling in metres.
+            height_min (float): Raw minimum altitude floor in metres.
+            vert_buffer_m (float): Vertical safety margin in metres subtracted from ceiling
+                and added to floor.
+
+        Output:
+            None (Initializes `self.raw_polygon` and `self.safe_polygon` as counter-clockwise
+            Shapely `Polygon` objects).
         """
         if len(polygon_enu) < 3:
             raise ValueError(f"Geofence requires >= 3 points, got {len(polygon_enu)}")
@@ -56,11 +81,11 @@ class BufferedGeofence:
             # Fix minor self-intersections if present
             self.raw_polygon = self.raw_polygon.buffer(0)
 
-        # Ensure counter-clockwise orientation for reflex vertex math
+        # Ensure counter-clockwise (CCW) vertex order so "inside" is always on the left
         self.raw_polygon = ops.orient(self.raw_polygon, sign=1.0)
 
         # Inward-buffered safe flight polygon
-        # Negative buffer contracts the polygon inward; miter join preserves crisp corners
+        # Negative buffer shrinks the polygon inward; mitre join keeps sharp corners
         safe_buffered = self.raw_polygon.buffer(
             -self.buffer_m, join_style="mitre", mitre_limit=3.0
         )
@@ -71,7 +96,7 @@ class BufferedGeofence:
             )
 
         if isinstance(safe_buffered, MultiPolygon):
-            # Narrow corridor choked off into disjoint polygons; select the largest
+            # Narrow corridor choked off into disjoint islands; keep the largest island
             self.safe_polygon = max(safe_buffered.geoms, key=lambda p: p.area)
         else:
             self.safe_polygon = safe_buffered
@@ -88,7 +113,21 @@ class BufferedGeofence:
         buffer_m: float = DEFAULT_HORIZ_BUFFER_M,
         vert_buffer_m: float = DEFAULT_VERT_BUFFER_M,
     ) -> "BufferedGeofence":
-        """Construct from a WGS84 GeofenceDefinition projected around an origin."""
+        """
+        Bridge between `geofence_loader.py` and `geofence.py`: converts a GPS
+        `GeofenceDefinition` into a metric ENU `BufferedGeofence` using `wgs84_to_enu()`.
+
+        Input:
+            definition (GeofenceDefinition): GPS fence returned by `load_geofence()`.
+            origin_lat (float): Drone's home/takeoff latitude in decimal degrees.
+            origin_lon (float): Drone's home/takeoff longitude in decimal degrees.
+            origin_alt (float): Drone's home/takeoff altitude in metres (AMSL).
+            buffer_m (float): Horizontal inward safety margin in metres.
+            vert_buffer_m (float): Vertical safety margin in metres.
+
+        Output:
+            BufferedGeofence: Initialized ENU geofence ready for `VisibilityGraphPlanner`.
+        """
         enu_coords = []
         for lat, lon in definition.polygon_wgs84:
             x, y, _ = wgs84_to_enu(
@@ -109,26 +148,61 @@ class BufferedGeofence:
     # -------------------------------------------------------------------------
 
     def is_safe_2d(self, x: float, y: float) -> bool:
-        """Check if an ENU (x, y) point lies strictly inside the safe buffered area."""
+        """
+        Check if a 2D ENU point lies inside or on the boundary of `safe_polygon`.
+
+        Input:
+            x (float): East position in metres.
+            y (float): North position in metres.
+
+        Output:
+            bool: True if `(x, y)` is inside the shrunk safe zone; False otherwise.
+        """
         pt = Point(x, y)
         return self.safe_polygon.contains(pt) or self.safe_polygon.touches(pt)
 
     def is_safe_3d(self, x: float, y: float, z: float) -> bool:
-        """Check if an ENU (x, y, z) position satisfies both 2D buffer and 3D height limits."""
+        """
+        Check if a 3D ENU position is inside both the 2D safe polygon and safe altitude limits.
+
+        Input:
+            x (float): East position in metres.
+            y (float): North position in metres.
+            z (float): Up altitude in metres.
+
+        Output:
+            bool: True if `(x, y, z)` is completely within the 3D safe flight box.
+        """
         if not self.is_safe_2d(x, y):
             return False
         return self.safe_altitude_min <= z <= self.safe_altitude_max
 
     def is_inside_raw_fence(self, x: float, y: float) -> bool:
-        """Check if an ENU (x, y) point is inside the raw legal geofence (unbuffered)."""
+        """
+        Check if a 2D ENU point is inside the unbuffered legal fence (`raw_polygon`).
+
+        Input:
+            x (float): East position in metres.
+            y (float): North position in metres.
+
+        Output:
+            bool: True if legally inside the outer boundary (even if inside the 2m buffer).
+        """
         pt = Point(x, y)
         return self.raw_polygon.contains(pt) or self.raw_polygon.touches(pt)
 
     def distance_to_raw_boundary(self, x: float, y: float) -> float:
         """
-        Signed distance from (x, y) to the raw geofence boundary:
-          - Positive: inside the fence (metres of margin remaining)
-          - Negative: outside the fence (breached)
+        Compute the signed distance in metres from `(x, y)` to the outer legal wall.
+
+        Input:
+            x (float): East position in metres.
+            y (float): North position in metres.
+
+        Output:
+            float: Signed distance in metres:
+                - Positive (`> 0`): Inside the legal fence (metres remaining before breach).
+                - Negative (`< 0`): Outside the legal fence (breached by this many metres).
         """
         pt = Point(x, y)
         dist = self.raw_polygon.exterior.distance(pt)
@@ -140,16 +214,40 @@ class BufferedGeofence:
 
     @property
     def safe_altitude_max(self) -> float:
-        """Upper flight ceiling accounting for vertical safety buffer (metres)."""
+        """
+        Upper flight ceiling after subtracting `vert_buffer_m`.
+
+        Input:
+            None
+
+        Output:
+            float: Maximum safe altitude `z` in metres.
+        """
         return max(self.height_min, self.height_max - self.vert_buffer_m)
 
     @property
     def safe_altitude_min(self) -> float:
-        """Lower flight floor accounting for vertical safety buffer (metres)."""
+        """
+        Lower flight floor after adding `vert_buffer_m`.
+
+        Input:
+            None
+
+        Output:
+            float: Minimum safe altitude `z` in metres.
+        """
         return self.height_min + self.vert_buffer_m
 
     def clamp_altitude(self, z: float) -> float:
-        """Clamp commanded altitude to the safe vertical envelope."""
+        """
+        Keep an altitude `z` within `[safe_altitude_min, safe_altitude_max]`.
+
+        Input:
+            z (float): Desired Up altitude in metres.
+
+        Output:
+            float: Clamped altitude in metres guaranteed to be within safe vertical bounds.
+        """
         return max(self.safe_altitude_min, min(z, self.safe_altitude_max))
 
     # -------------------------------------------------------------------------
@@ -158,15 +256,23 @@ class BufferedGeofence:
 
     def clamp_target_to_safe_boundary(self, x: float, y: float) -> tuple[float, float]:
         """
-        If (x, y) is inside the safe boundary, returns (x, y) unchanged.
-        If (x, y) lies inside the buffer margin or outside entirely, projects
-        the point orthogonally onto the nearest point of the safe boundary exterior.
+        Snap an out-of-bounds 2D point onto the nearest edge/corner of `safe_polygon`.
+        Used by `VisibilityGraphPlanner.plan_path()` so that even if Start or Goal is
+        slightly outside the safe zone, planning still begins/ends on the safe perimeter.
+
+        Input:
+            x (float): Desired East position in metres.
+            y (float): Desired North position in metres.
+
+        Output:
+            tuple[float, float]: `(safe_x, safe_y)` in metres. Returns `(x, y)` unchanged
+            if already inside `safe_polygon`, or the closest point on `safe_polygon.exterior`.
         """
         if self.is_safe_2d(x, y):
             return x, y
 
         pt = Point(x, y)
-        # Find nearest point on the exterior of the safe polygon
+        # Find nearest point on the exterior ring of the safe polygon
         nearest_geom, _ = ops.nearest_points(self.safe_polygon.exterior, pt)
         return float(nearest_geom.x), float(nearest_geom.y)
 
@@ -174,17 +280,22 @@ class BufferedGeofence:
         self, x: float, y: float, z: float
     ) -> tuple[tuple[float, float, float], float, bool]:
         """
-        Evaluates a 3D target waypoint:
-        Returns:
-          (staged_target_point, recommended_max_speed, requires_creep)
+        Evaluate a 3D target waypoint and decide how the drone should approach it:
+          - Case 1 (Already inside `safe_polygon`): Fly directly at normal speed.
+          - Case 2 (In the buffer strip between `safe_polygon` and `raw_polygon`):
+            First stop ("stage") at the nearest point on `safe_polygon`, then creep
+            slowly (`0.3 m/s`) toward the target (`requires_creep = True`).
+          - Case 3 (Completely outside `raw_polygon`): Clamp hard to `safe_polygon`
+            at normal speed (`requires_creep = False`).
 
-        If target is inside the raw fence but penetrates the 2m buffer (e.g. 1m from fence):
-          - Returns a staging point on the 2m safe boundary, recommends CRAWL_SPEED_MPS (0.3 m/s),
-            and flags requires_creep = True.
-        If target is completely out of bounds (< 0m):
-          - Clamps to safe boundary at normal speed.
-        If target is already safe:
-          - Returns unchanged at normal speed.
+        Input:
+            x, y, z (float): Requested target position `(East, North, Up)` in metres.
+
+        Output:
+            tuple[tuple[float, float, float], float, bool]:
+                - `staged_target_point`: `(safe_x, safe_y, safe_z)` in metres on/inside the safe zone.
+                - `recommended_max_speed`: `0.3` m/s if creeping into the buffer, or `-1.0` (no limit).
+                - `requires_creep`: `True` if target is in the buffer zone and needs a slow final approach.
         """
         safe_z = self.clamp_altitude(z)
 
@@ -208,14 +319,28 @@ class BufferedGeofence:
 
     def get_reflex_vertices(self, nudge_m: float = 0.0) -> list[tuple[float, float]]:
         """
-        Find all reflex vertices of the safe buffered polygon.
-        In a counter-clockwise oriented polygon, a reflex vertex turns clockwise
-        (cross product of incoming and outgoing edge vectors is negative).
-        These reflex vertices represent the necessary turning waypoints to navigate
-        around inward concave indentations.
+        Find all "reflex" (concave/inward-dent) corners of `safe_polygon`.
 
-        If nudge_m > 0, the vertex is projected into the interior along the
-        exact interior angle bisector so flight paths have turning clearance.
+        Mental Model:
+          Imagine walking counter-clockwise around the perimeter of `safe_polygon`
+          (so the safe flight area is always on your left):
+            - At a normal outer corner (convex), you turn LEFT (2D cross product > 0).
+              A drone never needs to visit an outer corner to take a shortcut.
+            - At an inward dent (concave/reflex), the wall pokes into the flight area,
+              forcing you to turn RIGHT (2D cross product < 0).
+              The shortest path around a dent always bends around these reflex corners!
+
+          If `nudge_m > 0`, each reflex corner is pushed slightly further into the safe
+          interior along the corner's diagonal angle bisector so the drone's turn doesn't
+          scrape the corner of `safe_polygon`.
+
+        Input:
+            nudge_m (float): Distance in metres to push each reflex corner inward into
+                the safe zone (e.g., `0.3` m when called by `VisibilityGraphPlanner`).
+
+        Output:
+            list[tuple[float, float]]: List of `(x_east, y_north)` turning waypoints in
+            metres, passed directly to `VisibilityGraphPlanner.plan_path()` as graph nodes.
         """
         coords = list(self.safe_polygon.exterior.coords)
         if coords[0] == coords[-1]:

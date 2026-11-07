@@ -1,13 +1,18 @@
 """
 Flexible loader for geofence definitions.
 
+Role in Pipeline (Step 1):
+  Reads raw geofence files from disk (QGroundControl `.plan`, GeoJSON, or JSON) and
+  normalizes them into a single standard Python dataclass: `GeofenceDefinition`
+  containing GPS `[(lat, lon), ...]` vertices and height limits.
+  This `GeofenceDefinition` is then passed into `BufferedGeofence.from_wgs84()` in
+  `geofence.py` to convert the GPS fence into local ENU metres.
+
 Supports:
   1. QGroundControl (.plan) files containing "geoFence" polygons and altitude limits.
   2. GeoJSON files or dicts (RFC 7946 Polygon geometry).
   3. Simple JSON files containing coordinate lists.
   4. Direct Python coordinate lists [(lat, lon), ...].
-
-All loaders return a standardized GeofenceDefinition.
 """
 
 from dataclasses import dataclass
@@ -18,7 +23,17 @@ from typing import Any, Union
 
 @dataclass
 class GeofenceDefinition:
-    """Standardized geofence definition in WGS84 GPS coordinates."""
+    """
+    Standardized geofence container in WGS84 GPS coordinates.
+
+    Produced by `load_geofence()` and consumed by `BufferedGeofence.from_wgs84()`.
+
+    Attributes:
+        polygon_wgs84 (list[tuple[float, float]]): Ordered boundary corners as [(lat_deg, lon_deg), ...].
+        height_max (float): Maximum allowed altitude in metres relative to takeoff origin.
+        height_min (float): Minimum allowed altitude in metres relative to takeoff origin.
+        inclusion (bool): True if the drone must stay inside this polygon; False if keep-out zone.
+    """
 
     polygon_wgs84: list[tuple[float, float]]  # [(lat, lon), ...]
     height_max: float = 30.0  # Metres relative to takeoff origin
@@ -29,7 +44,18 @@ class GeofenceDefinition:
 def _extract_qgc_polygon(
     qgc_poly: dict[str, Any],
 ) -> tuple[list[tuple[float, float]], bool]:
-    """Extract points and inclusion flag from a QGroundControl polygon object."""
+    """
+    Internal helper to extract GPS vertices and inclusion flag from one QGC polygon dict.
+
+    Input:
+        qgc_poly (dict[str, Any]): A single polygon entry from `data["geoFence"]["polygons"]`
+            in a QGroundControl `.plan` file.
+
+    Output:
+        tuple[list[tuple[float, float]], bool]:
+            - coords: List of `(lat, lon)` tuples in decimal degrees.
+            - inclusion: Boolean flag (True = stay inside).
+    """
     inclusion = qgc_poly.get("inclusion", True)
     raw_points = qgc_poly.get("polygon", [])
     coords = []
@@ -45,7 +71,16 @@ def _extract_qgc_polygon(
 
 
 def load_from_qgc_plan(data: dict[str, Any]) -> GeofenceDefinition:
-    """Parse a QGroundControl .plan JSON dictionary."""
+    """
+    Parse a QGroundControl `.plan` JSON dictionary into a GeofenceDefinition.
+
+    Input:
+        data (dict[str, Any]): Parsed JSON dictionary of a QGC `.plan` file, expected to
+            contain a `"geoFence"` key with `"polygons"`.
+
+    Output:
+        GeofenceDefinition: Standardized WGS84 geofence with vertices and altitude bounds.
+    """
     geofence_data = data.get("geoFence", {})
     polygons = geofence_data.get("polygons", [])
 
@@ -77,10 +112,16 @@ def load_from_qgc_plan(data: dict[str, Any]) -> GeofenceDefinition:
 
 def load_from_geojson(data: dict[str, Any]) -> GeofenceDefinition:
     """
-    Parse a GeoJSON Polygon or Feature object.
+    Parse a GeoJSON Polygon or Feature dictionary into a GeofenceDefinition.
 
-    Note: GeoJSON coordinates are [lon, lat], whereas aviation convention is (lat, lon).
-    This function converts [lon, lat] -> (lat, lon).
+    Note: GeoJSON stores coordinates as `[lon, lat]`, whereas aviation/GPS convention
+    is `(lat, lon)`. This function automatically flips `[lon, lat] -> (lat, lon)`.
+
+    Input:
+        data (dict[str, Any]): Parsed GeoJSON dict (`type: "Feature"` or `type: "Polygon"`).
+
+    Output:
+        GeofenceDefinition: Standardized WGS84 geofence with `(lat, lon)` vertices.
     """
     geometry = data
     if data.get("type") == "Feature":
@@ -118,15 +159,19 @@ def load_geofence(
     height_min: float = 0.0,
 ) -> GeofenceDefinition:
     """
-    Universal geofence loader.
+    Universal entry-point to load a geofence from any supported file or data structure.
+    Automatically detects whether the input is a file path, QGC `.plan` dict, GeoJSON dict,
+    or a raw list of `(lat, lon)` pairs.
 
-    Args:
-        source: File path (str/Path) or parsed dict/list.
-        height_max: Default altitude ceiling in metres (if not specified in source).
-        height_min: Default altitude floor in metres (if not specified in source).
+    Input:
+        source (str | Path | dict | list): Path to a `.plan`/`.geojson`/`.json` file,
+            an already-parsed JSON dict, or a list of `[(lat, lon), ...]` tuples.
+        height_max (float): Fallback max altitude in metres if not specified in the file.
+        height_min (float): Fallback min altitude in metres if not specified in the file.
 
-    Returns:
-        Standardized GeofenceDefinition.
+    Output:
+        GeofenceDefinition: Standardized WGS84 geofence ready to pass into
+            `BufferedGeofence.from_wgs84()`.
     """
     if isinstance(source, (str, Path)):
         path = Path(source)
