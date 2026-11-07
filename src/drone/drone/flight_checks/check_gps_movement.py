@@ -28,6 +28,9 @@ from drone.flight_checks.common import (
 
 ARRIVAL_TOLERANCE_M = 0.5
 ALTITUDE_TOLERANCE_M = 0.5
+# Passing through the tolerance circle at speed is not arriving: landing then
+# overshoots by metres, because PX4 lands wherever the drone ends up stopping.
+ARRIVAL_SPEED_MPS = 0.3
 SETPOINT_RATE_HZ = 10
 TAKEOFF_ALTITUDE_M = 5.0
 
@@ -67,6 +70,8 @@ def fly_to_target(px4, target_gps, launch_alt, hover_alt):
             current_pos["x"] - target_x, current_pos["y"] - target_y
         )
         altitude_error = abs(current_pos["z"] - target_alt)
+        velocity = px4.get_velocity()
+        speed = math.hypot(velocity["x"], velocity["y"]) if velocity else math.inf
         px4.send_position_setpoint(
             target_x, target_y, target_alt, yaw=None, yaw_from_direction=True
         )
@@ -74,15 +79,16 @@ def fly_to_target(px4, target_gps, launch_alt, hover_alt):
         now = time.time()
         if now - last_log >= 1.0:
             print(
-                f"[CHECK] Distance XY: {horizontal_distance:.2f}m, alt error: {altitude_error:.2f}m"
+                f"[CHECK] Distance XY: {horizontal_distance:.2f}m, alt error: {altitude_error:.2f}m, speed: {speed:.2f}m/s"
             )
             last_log = now
         if (
             horizontal_distance <= ARRIVAL_TOLERANCE_M
             and altitude_error <= ALTITUDE_TOLERANCE_M
+            and speed <= ARRIVAL_SPEED_MPS
         ):
             print(
-                f"[CHECK] ✓ Reached target (xy={horizontal_distance:.2f}m, alt_err={altitude_error:.2f}m)"
+                f"[CHECK] ✓ Reached target (xy={horizontal_distance:.2f}m, alt_err={altitude_error:.2f}m, speed={speed:.2f}m/s)"
             )
             return True
         time.sleep(dt)
