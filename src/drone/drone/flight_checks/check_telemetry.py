@@ -72,7 +72,7 @@ def print_basic_telemetry(px4):
             f"Home Position: Lat={home['latitude']:.6f}°, Lon={home['longitude']:.6f}°, Alt={home['altitude']}"
         )
     else:
-        print("Home Position: <not available>")
+        print("Home Position: not received yet (PX4 sends it at boot and on arming)")
 
     print(f"Landed:        {px4.is_landed()}")
     print("=" * 60)

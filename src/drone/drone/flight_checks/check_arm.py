@@ -36,9 +36,9 @@ def print_diagnostics(px4):
         print(f"GPS Fix: {gps['fix_type']}")
     home = px4.get_home_location()
     print(
-        f"Home Set: Yes ({home['latitude']}, {home['longitude']}, {home['altitude']}m)"
+        f"Home: ({home['latitude']}, {home['longitude']}, {home['altitude']}m)"
         if home
-        else "Home Set: No"
+        else "Home: not received yet (PX4 sends it at boot and on arming)"
     )
     print("===========================\n")
 
@@ -73,6 +73,12 @@ def check(px4, args):
             return False
 
     print("[CHECK] ✓ Vehicle armed")
+    home = px4.wait_for_home(timeout=3.0)
+    print(
+        f"[CHECK] Home after arming: ({home['latitude']:.7f}, {home['longitude']:.7f})"
+        if home
+        else "[CHECK] Home still not received 3 s after arming"
+    )
     if args.api:
         px4.disarm_vehicle()
     else:
