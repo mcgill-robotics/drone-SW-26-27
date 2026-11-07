@@ -251,9 +251,25 @@ class TelemetryMixin:
         return convert_ned_enu.gps_raw(msg)
 
     def get_home_location(self):
-        """Where PX4 set home (usually where it armed), as latitude/longitude/altitude."""
+        """
+        Where PX4 set home (usually where it armed), as latitude/longitude/altitude, or None.
+
+        Often None before arming: PX4 sends home only to the first agent connection
+        after it boots, and again when home changes (arming, takeoff). Code that needs
+        home should call wait_for_home() after arming.
+        """
         msg = self._latest["home"]
         return convert_ned_enu.home_position(msg) if msg is not None else None
+
+    def wait_for_home(self, timeout=5.0):
+        """Wait until home has been received. Returns it, or None after `timeout`."""
+        start = time.monotonic()
+        while (time.monotonic() - start) < timeout:
+            home = self.get_home_location()
+            if home is not None:
+                return home
+            time.sleep(0.1)
+        return None
 
     def get_battery_status(self):
         """{"voltage", "current", "percentage", "remaining"}, or None."""

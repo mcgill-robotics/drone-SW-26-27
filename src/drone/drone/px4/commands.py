@@ -271,14 +271,18 @@ class CommandsMixin:
             print("[PX4] Landing command accepted")
 
         start = time.time()
+        near_ground_logged = False
         while (time.time() - start) < timeout:
+            # Only PX4's land detector counts. Altitude is relative to where the
+            # estimator started, so "z near 0" can be true in the air. The detector
+            # can take 15+ s after touchdown (seen in SITL); PX4 disarms after it.
             if self.is_landed():
                 print("[PX4] Landing complete, vehicle reports landed")
                 return True
             loc = self.get_location()
-            if loc and loc["z"] < 0.1:
-                print(f"[PX4] Landing complete, reached {loc['z']:.2f}m")
-                return True
+            if loc and loc["z"] < 0.3 and not near_ground_logged:
+                print("[PX4] Near the ground, waiting for PX4 to confirm touchdown...")
+                near_ground_logged = True
             time.sleep(0.5)
 
         print("[PX4] Landing timeout")

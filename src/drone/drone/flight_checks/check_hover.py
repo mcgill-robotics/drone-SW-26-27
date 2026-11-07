@@ -36,7 +36,7 @@ def check(px4, args):
     time.sleep(args.hover_seconds)
 
     print("\n[CHECK] Landing...")
-    if not px4.land(timeout=30):
+    if not px4.land(timeout=60):
         print("[CHECK] Landing failed")
         return False
     return px4.stop_offboard_stream_background()
