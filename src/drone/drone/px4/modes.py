@@ -23,6 +23,16 @@ VEHICLE_CMD_DO_SET_MODE = 176
 VEHICLE_CMD_DO_SET_ACTUATOR = 187
 VEHICLE_CMD_DO_MOUNT_CONTROL = 205
 VEHICLE_CMD_COMPONENT_ARM_DISARM = 400
+VEHICLE_CMD_DO_VTOL_TRANSITION = 3000
+
+# First parameter of a VTOL transition command: which way to fly afterwards
+# (VtolVehicleStatus.VEHICLE_VTOL_STATE_MC / _FW in px4_msgs).
+VTOL_STATE_MULTICOPTER = 3
+VTOL_STATE_FIXED_WING = 4
+
+# VehicleStatus.vehicle_type values
+VEHICLE_TYPE_ROTARY_WING = 1
+VEHICLE_TYPE_FIXED_WING = 2
 
 # First parameter of a set-mode command: 1 means "the next two numbers are a PX4 mode".
 CUSTOM_MODE_ENABLED = 1.0
@@ -107,3 +117,21 @@ def nav_state_names(status_type):
             name = "STABILIZED"
         names[int(getattr(status_type, attr))] = name
     return names
+
+
+def vtol_state_name(is_vtol, vehicle_type, in_transition_mode, in_transition_to_fw):
+    """
+    How a VTOL is flying right now, from VehicleStatus fields.
+
+    Returns "multicopter", "fixed_wing", "transition_to_fw", "transition_to_mc",
+    or None if the vehicle is not a VTOL (or its type is unknown).
+    """
+    if not is_vtol:
+        return None
+    if in_transition_mode:
+        return "transition_to_fw" if in_transition_to_fw else "transition_to_mc"
+    if int(vehicle_type) == VEHICLE_TYPE_FIXED_WING:
+        return "fixed_wing"
+    if int(vehicle_type) == VEHICLE_TYPE_ROTARY_WING:
+        return "multicopter"
+    return None

@@ -31,6 +31,8 @@ setup(
             "check_goto_gps = drone.flight_checks.check_goto_gps:main",
             "check_gps_movement = drone.flight_checks.check_gps_movement:main",
             "check_lap = drone.flight_checks.check_lap:main",
+            # VTOL only
+            "check_transition = drone.flight_checks.check_transition:main",
         ],
     },
 )

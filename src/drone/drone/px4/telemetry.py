@@ -29,7 +29,7 @@ from px4_msgs.msg import (
 
 from drone.px4 import convert_ned_enu
 from drone.px4.ned_enu_math_convert import euler_ned_to_enu
-from drone.px4.modes import nav_state_names, normalize_mode_name
+from drone.px4.modes import nav_state_names, normalize_mode_name, vtol_state_name
 from drone.px4.qos import PX4_QOS
 from drone.px4.topics import out_topic
 
@@ -162,6 +162,26 @@ class TelemetryMixin:
         """True if PX4 detects the drone is on the ground."""
         land = self._latest["land_detected"]
         return bool(land.landed) if land is not None else False
+
+    def is_vtol(self):
+        """True if PX4 reports this vehicle can switch between multicopter and fixed wing."""
+        status = self._latest["status"]
+        return bool(status.is_vtol) if status is not None else False
+
+    def get_vtol_state(self):
+        """
+        How a VTOL is flying: "multicopter", "fixed_wing", "transition_to_fw" or
+        "transition_to_mc". None if it is not a VTOL or nothing has arrived yet.
+        """
+        status = self._latest["status"]
+        if status is None:
+            return None
+        return vtol_state_name(
+            status.is_vtol,
+            status.vehicle_type,
+            status.in_transition_mode,
+            status.in_transition_to_fw,
+        )
 
     # =========================================================
     # Position, velocity, attitude

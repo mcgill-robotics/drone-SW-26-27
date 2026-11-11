@@ -163,6 +163,27 @@ class TestModes:
             assert modes.normalize_mode_name(name) == name
 
 
+class TestVtol:
+    def test_transition_values_match_px4(self):
+        # px4_msgs VehicleCommand / VtolVehicleStatus, release/1.17
+        assert modes.VEHICLE_CMD_DO_VTOL_TRANSITION == 3000
+        assert modes.VTOL_STATE_MULTICOPTER == 3
+        assert modes.VTOL_STATE_FIXED_WING == 4
+
+    def test_not_a_vtol(self):
+        assert modes.vtol_state_name(False, 1, False, False) is None
+
+    @pytest.mark.parametrize(
+        "vehicle_type, expected", [(1, "multicopter"), (2, "fixed_wing"), (0, None)]
+    )
+    def test_steady_flight(self, vehicle_type, expected):
+        assert modes.vtol_state_name(True, vehicle_type, False, False) == expected
+
+    def test_transitions_win_over_vehicle_type(self):
+        assert modes.vtol_state_name(True, 1, True, True) == "transition_to_fw"
+        assert modes.vtol_state_name(True, 2, True, False) == "transition_to_mc"
+
+
 # ---------------------------------------------------------------------------
 # setpoints
 # ---------------------------------------------------------------------------

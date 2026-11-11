@@ -208,6 +208,14 @@ Executes a multi-waypoint perimeter lap using smooth velocity setpoints (fast on
   ```
 * **Configuration:** Edit `LAP_WAYPOINTS` inside `check_lap.py` with your airfield GPS coordinates before flying.
 
+### VTOL only: `check_transition` — Multicopter ↔ Fixed Wing
+Takes off as a multicopter, switches to fixed wing (`px4.transition_to_fixed_wing()`), flies out and back, switches back (`px4.transition_to_multicopter()`) and lands. PX4 flies the transitions; the check confirms PX4 reports each new flight type. Needs a VTOL airframe and plenty of space.
+
+* **Simulation** (PX4's VTOL model: `make px4_sitl gz_standard_vtol`):
+  ```bash
+  ros2 run drone check_transition --sitl --api
+  ```
+
 ---
 
 ## 4. Shared Command-Line Flags

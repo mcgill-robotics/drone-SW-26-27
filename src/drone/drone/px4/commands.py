@@ -75,6 +75,7 @@ class CommandsMixin:
             "VEHICLE_CMD_NAV_RETURN_TO_LAUNCH": modes.VEHICLE_CMD_NAV_RETURN_TO_LAUNCH,
             "VEHICLE_CMD_DO_SET_ACTUATOR": modes.VEHICLE_CMD_DO_SET_ACTUATOR,
             "VEHICLE_CMD_DO_MOUNT_CONTROL": modes.VEHICLE_CMD_DO_MOUNT_CONTROL,
+            "VEHICLE_CMD_DO_VTOL_TRANSITION": modes.VEHICLE_CMD_DO_VTOL_TRANSITION,
         }
         for name, value in expected.items():
             actual = getattr(VehicleCommand, name, None)
@@ -282,6 +283,66 @@ class CommandsMixin:
             time.sleep(0.5)
 
         print("[PX4] Landing timeout")
+        return False
+
+    # =========================================================
+    # VTOL: switching between multicopter and fixed wing
+    # =========================================================
+    # PX4 flies the transition itself (speeding up, tilting/stopping the lift
+    # motors). We only ask for it and wait until PX4 reports it is done.
+
+    def transition_to_fixed_wing(self, timeout=30.0, min_altitude_m=10.0):
+        """
+        Switch a hovering VTOL to fixed-wing flight. Returns True once PX4 reports fixed wing.
+
+        Refused below `min_altitude_m` (metres above the local origin): the drone
+        loses height while it speeds up, so it needs room underneath.
+        """
+        altitude = self.get_altitude()
+        if altitude < min_altitude_m:
+            print(
+                f"[PX4] Refusing fixed-wing transition at {altitude:.1f} m "
+                f"(minimum {min_altitude_m:.1f} m)"
+            )
+            return False
+        return self._vtol_transition(modes.VTOL_STATE_FIXED_WING, "fixed_wing", timeout)
+
+    def transition_to_multicopter(self, timeout=30.0):
+        """Switch a VTOL back to multicopter (hover) flight. Returns True once PX4 reports multicopter."""
+        return self._vtol_transition(
+            modes.VTOL_STATE_MULTICOPTER, "multicopter", timeout
+        )
+
+    def _vtol_transition(self, vtol_state, expected, timeout):
+        """Send the transition command, then wait until get_vtol_state() == expected."""
+        label = expected.replace("_", " ")
+        if not self.connected:
+            print(f"[PX4] Not connected to PX4, cannot transition to {label}")
+            return False
+        if not self.is_vtol():
+            print("[PX4] This vehicle is not a VTOL; PX4 would ignore a transition")
+            return False
+        if not self.is_armed() or self.is_landed():
+            print(f"[PX4] Must be flying to transition to {label}")
+            return False
+        if self.get_vtol_state() == expected:
+            print(f"[PX4] Already flying as {label}")
+            return True
+
+        print(f"[PX4] Requesting transition to {label}...")
+        # param2 = 0: normal transition (1 would skip PX4's airspeed checks)
+        result = self.send_command(
+            modes.VEHICLE_CMD_DO_VTOL_TRANSITION, (float(vtol_state), 0.0)
+        )
+        if not self._command_ok(f"Transition to {label}", result):
+            return False
+        if self._wait_until(lambda: self.get_vtol_state() == expected, timeout):
+            print(f"[PX4] Transition to {label} complete")
+            return True
+        print(
+            f"[PX4] Transition accepted but PX4 still reports {self.get_vtol_state()} "
+            f"after {timeout:.0f}s"
+        )
         return False
 
     # =========================================================
