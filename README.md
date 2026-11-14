@@ -19,6 +19,11 @@ topics under `/fmu/out` and `/fmu/in` with `px4_msgs` types. MAVROS is gone.
 - **[Arming Safety](docs/arming.md):** Safety interlocks, RC arm switch rules, and software `--api` restrictions.
 - **[Actuator Mapping](docs/actuators.md):** PX4 Actuator Sets 1–6 mapping for payloads and sprayers.
 
+## Live video
+
+See [the private Wi-Fi video guide](docs/video.md) for the Android RTSP-to-QGroundControl test, Jetson sender, and latency/range qualification.
+Production video lives in the independent `src/drone_video` package.
+
 ## Layout
 
 ```
