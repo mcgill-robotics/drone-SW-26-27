@@ -1,0 +1,11 @@
+[Unit]
+Description=Independent drone video sender
+After=network-online.target
+[Service]
+# Replace user and absolute checkout paths before installation.
+User=DRONE_USER
+ExecStart=/bin/bash -c 'source /opt/ros/humble/setup.bash && source /home/DRONE_USER/drone-2027/install/setup.bash && exec ros2 run drone_video sender --config /home/DRONE_USER/drone-2027/src/drone_video/config/jetson-csi.json'
+Restart=on-failure
+RestartSec=2
+[Install]
+WantedBy=multi-user.target
