@@ -5,6 +5,7 @@ Built on top of drone.px4.PX4Interface. Nothing in this package imports rclpy or
 px4_msgs, so it can be unit-tested anywhere (including CI) with a fake PX4 object.
 
     geometry.py          pure math: distances, arrival tolerance, body -> ENU frame
+    speed_profile.py     paces waypoint approaches and yaw turns
     commands.py          one class per kind of move (Command pattern)
     executor.py          runs a list of moves in order (state machine)
     telemetry_logger.py  records position, velocity, mode... to CSV (background thread)
