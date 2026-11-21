@@ -91,7 +91,9 @@ def check(px4, args):
             start = px4.get_location()
             if start is None:
                 raise RuntimeError("post-takeoff position unavailable")
-            executor = MissionExecutor(px4, build_mission(args.side, start), logger=log)
+            executor = MissionExecutor(
+                px4, build_mission(args.side, start), logger=log, max_speed=args.speed
+            )
             mission_ok = executor.run()
             print("\n[CHECK] Mission summary:")
             print(executor.summary())
@@ -174,7 +176,15 @@ def main():
     parser.add_argument(
         "--log-rate", type=float, default=10.0, help="Samples per second (default 10)"
     )
+    parser.add_argument(
+        "--speed",
+        type=float,
+        metavar="M/S",
+        help="Maximum reference speed for movement legs; cruise uses 80%% (m/s)",
+    )
     args = parser.parse_args()
+    if args.speed is not None and (not math.isfinite(args.speed) or args.speed <= 0):
+        parser.error("--speed must be finite and positive (m/s)")
     if not api_arm_allowed(args):
         return 2
     return run_main(check, args)

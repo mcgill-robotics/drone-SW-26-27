@@ -12,7 +12,7 @@ The executor (executor.py) calls, for each command:
     command.update(px4, context, t)   # repeatedly, until it returns DONE or FAILED
 
 PX4Interface's background heartbeat keeps repeating the last setpoint, so a command
-only has to send it once.
+only needs to publish again when its setpoint changes.
 
 `context` (MissionContext) carries the last commanded target from one command to
 the next, so relative moves chain from where the previous move *aimed*, not from
@@ -26,6 +26,7 @@ from abc import ABC, abstractmethod
 from enum import Enum
 
 from drone.movement import geometry
+from drone.movement.speed_profile import CRUISE_FRACTION, WaypointProfile, YawProfile
 
 # Never command a position target below this height (metres above the local origin).
 MIN_ALTITUDE_M = 1.0
@@ -79,14 +80,17 @@ class PositionCommand(MovementCommand):
 
     def __init__(
         self,
-        timeout=30.0,
+        timeout=None,
         label=None,
         tolerance=None,
         settle_speed=SETTLE_SPEED_MPS,
         yaw=None,
         yaw_tolerance=math.radians(5),
     ):
-        super().__init__(timeout=timeout, label=label)
+        self.default_timeout = timeout is None
+        super().__init__(timeout=30.0 if timeout is None else timeout, label=label)
+        self.profile = None
+        self.reference = None
         # Explicit headings are radians in ENU: East=0, North=pi/2.
         if yaw is not None and not math.isfinite(yaw):
             raise ValueError("yaw must be finite")
@@ -138,20 +142,44 @@ class PositionCommand(MovementCommand):
         self.started_at = now
         # Keep a requested camera heading across subsequent position moves.
         self.target_yaw = self.yaw if self.yaw is not None else context.last_yaw
-        yaw_options = {} if self.target_yaw is None else {"yaw": self.target_yaw}
-        if not px4.send_position_setpoint(*target, **yaw_options):
+        self.reference_yaw = self._yaw_at(0)
+        self.profile = None
+        self.reference = target
+        self.deadline = now + self.timeout
+        if context.max_speed is not None:
+            origin = geometry.as_tuple(current)
+            if origin[2] < MIN_ALTITUDE_M or (
+                ceiling is not None and origin[2] > ceiling
+            ):
+                self.fail("speed profile starts outside the allowed altitude range")
+                return False
+            self.profile = WaypointProfile(origin, target, context.max_speed)
+            self.reference = origin
+            if self.default_timeout:
+                self.deadline += self.profile.duration
+        if not self._send_reference(px4):
             self.fail("position setpoint was not sent")
             return False
         context.last_target = target
         context.last_yaw = self.target_yaw
         return True
 
+    def _yaw_at(self, elapsed):
+        return self.target_yaw
+
+    def _send_reference(self, px4):
+        yaw_options = {} if self.reference_yaw is None else {"yaw": self.reference_yaw}
+        return px4.send_position_setpoint(*self.reference, **yaw_options)
+
     def update(self, px4, context, now):
         current = px4.get_location()
         if current is None:
             return self.fail("lost local position")
         close_enough = geometry.reached(current, self.target, self.tolerance)
-        slow_enough = geometry.speed(px4.get_velocity()) <= self.settle_speed
+        velocity = px4.get_velocity()
+        if self.profile is not None and velocity is None:
+            return self.fail("local velocity unavailable")
+        slow_enough = geometry.speed(velocity) <= self.settle_speed
         yaw_error = None
         if self.target_yaw is not None:
             heading = px4.get_current_yaw()
@@ -165,9 +193,15 @@ class PositionCommand(MovementCommand):
                 )
             )
         facing_target = yaw_error is None or yaw_error <= self.yaw_tolerance
-        if close_enough and slow_enough and facing_target:
+        if (
+            self.reference == self.target
+            and self.reference_yaw == self.target_yaw
+            and close_enough
+            and slow_enough
+            and facing_target
+        ):
             return CommandStatus.DONE
-        if now - self.started_at > self.timeout:
+        if now > self.deadline:
             left = geometry.distance(current, self.target)
             detail = (
                 ""
@@ -175,6 +209,13 @@ class PositionCommand(MovementCommand):
                 else f", yaw error {math.degrees(yaw_error):.1f} deg"
             )
             return self.fail(f"timed out {left:.2f} m from target{detail}")
+        elapsed = now - self.started_at
+        position = self.profile.position_at(elapsed) if self.profile else self.target
+        yaw = self._yaw_at(elapsed)
+        if position != self.reference or yaw != self.reference_yaw:
+            self.reference, self.reference_yaw = position, yaw
+            if not self._send_reference(px4):
+                return self.fail("position setpoint was not sent")
         return CommandStatus.RUNNING
 
 
@@ -188,6 +229,17 @@ class RotateTo(PositionCommand):
     def __init__(self, yaw, **kwargs):
         kwargs.setdefault("label", f"RotateTo({math.degrees(yaw):.1f} deg)")
         super().__init__(yaw=yaw, **kwargs)
+
+    def start(self, px4, context, now):
+        heading = px4.get_current_yaw()
+        if heading is None or not math.isfinite(heading):
+            self.fail("heading unavailable")
+            return False
+        self.yaw_profile = YawProfile(heading, self.yaw)
+        return super().start(px4, context, now)
+
+    def _yaw_at(self, elapsed):
+        return self.yaw_profile.heading_at(elapsed)
 
     def default_label(self):
         return "RotateTo"
@@ -305,11 +357,20 @@ class FlyVelocity(MovementCommand):
         if loc is None:
             self.fail("local position unavailable")
             return False
-        predicted_z = loc["z"] + self.velocity[2] * self.seconds
+        velocity = self.velocity
+        if context.max_speed is not None:
+            cruise = CRUISE_FRACTION * context.max_speed
+            requested = math.hypot(*velocity)
+            if requested > cruise:
+                print(f"[MISSION] Limiting velocity request to {cruise:g} m/s")
+                velocity = tuple(
+                    component * (cruise / requested) for component in velocity
+                )
+        predicted_z = loc["z"] + velocity[2] * self.seconds
         if predicted_z < MIN_ALTITUDE_M:
             self.fail(f"would descend to {predicted_z:.2f} m, below the minimum")
             return False
-        if not px4.send_velocity_setpoint(*self.velocity):
+        if not px4.send_velocity_setpoint(*velocity):
             self.fail("velocity setpoint was not sent")
             return False
         return True

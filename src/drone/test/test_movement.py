@@ -322,3 +322,79 @@ class TestTelemetryLogger:
         assert log.rows_written > 0
         with open(path) as f:
             assert len(list(csv.DictReader(f))) == log.rows_written
+
+
+def test_profile_speed_at_distance_marks():
+    from drone.movement.speed_profile import WaypointProfile
+
+    profile = WaypointProfile((0, 0, 3), (10, 0, 3), 2)
+    # Durations from segment length divided by average speed.
+    elapsed = 0
+    for seconds, x, speed in [
+        (5.0, 8.0, 1.6),
+        (1 / 0.9, 9.0, 0.2),
+        (0.5 / 0.15, 9.5, 0.1),
+        (5.0, 10.0, 0.1),
+    ]:
+        elapsed += seconds
+        assert profile.position_at(elapsed)[0] == pytest.approx(x)
+        previous_x = profile.position_at(elapsed - 0.0001)[0]
+        assert (x - previous_x) / 0.0001 == pytest.approx(speed, abs=0.001)
+    assert profile.position_at(elapsed + 1) == (10, 0, 3)
+
+
+def test_slow_waypoint_reaches_exact_target_before_chaining():
+    clock = FakeClock()
+    px4 = FakePX4(clock=clock)
+    executor = MissionExecutor(
+        px4, [east(5), north(0.1)], max_speed=0.2, clock=clock, sleep=clock.sleep
+    )
+    assert executor.run()
+    assert executor.results[0].duration_s > 30
+    assert_at(px4, 5, 0.1, 3)
+    assert all(
+        math.dist(a[1], b[1]) <= 0.2 * 0.8 * 0.2 + 1e-9
+        for a, b in zip(px4.setpoints, px4.setpoints[1:])
+    )
+
+
+def test_profile_still_checks_measured_arrival_and_explicit_timeout():
+    clock = FakeClock()
+    px4 = FakePX4(clock=clock, stuck=True)
+    executor = MissionExecutor(
+        px4, [east(1, timeout=6)], max_speed=2, clock=clock, sleep=clock.sleep
+    )
+    assert not executor.run()
+    assert "timed out" in executor.results[0].reason
+    assert ("position", (1, 0, 3)) in px4.setpoints
+
+
+def test_velocity_cap_preserves_3d_direction():
+    clock = FakeClock()
+    px4 = FakePX4(clock=clock)
+    executor = MissionExecutor(
+        px4, [FlyVelocity(east=3, up=4)], max_speed=2, clock=clock, sleep=clock.sleep
+    )
+    assert executor.run()
+    assert px4.setpoints[0][1] == pytest.approx((0.96, 0, 1.28))
+
+
+@pytest.mark.parametrize("value", ["0", "-1", "inf", "nan"])
+def test_cli_rejects_invalid_speed_before_connecting(monkeypatch, value):
+    from drone.flight_checks import check_movement
+
+    monkeypatch.setattr("sys.argv", ["check_movement", "--speed", value])
+    with pytest.raises(SystemExit) as exc:
+        check_movement.main()
+    assert exc.value.code == 2
+
+
+@pytest.mark.parametrize(
+    "max_speed, duration", [(1.0, 5 + 0.5 / 0.45 + 5), (0.1, 5 / 0.08)]
+)
+def test_approach_floor_respects_slow_cruise(max_speed, duration):
+    from drone.movement.speed_profile import WaypointProfile
+
+    profile = WaypointProfile((0, 0, 3), (5, 0, 3), max_speed)
+    assert profile.duration == pytest.approx(duration)
+    assert profile.position_at(duration + 1) == (5, 0, 3)

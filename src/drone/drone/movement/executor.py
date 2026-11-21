@@ -19,6 +19,7 @@ On FAILED or ABORTED the executor requests position hold. A failed request is
 reported; it does not guarantee the drone stopped. Landing is up to the caller.
 """
 
+import math
 import time
 from dataclasses import dataclass
 from enum import Enum
@@ -54,6 +55,7 @@ class MissionContext:
 
     last_target: tuple = None
     last_yaw: float = None  # Explicit ENU heading retained by position commands.
+    max_speed: float = None  # Optional movement reference speed in m/s.
 
 
 @dataclass
@@ -79,6 +81,7 @@ class MissionExecutor:
         poll_period=0.2,
         clock=time.monotonic,
         sleep=time.sleep,
+        max_speed=None,
     ):
         self.px4 = px4
         self.commands = list(commands)
@@ -87,7 +90,9 @@ class MissionExecutor:
         self.clock = clock
         self.sleep = sleep
         self.state = MissionState.IDLE
-        self.context = MissionContext()
+        if max_speed is not None and (not math.isfinite(max_speed) or max_speed <= 0):
+            raise ValueError("max_speed must be finite and positive")
+        self.context = MissionContext(max_speed=max_speed)
         self.results = []
         self._abort_requested = False
 

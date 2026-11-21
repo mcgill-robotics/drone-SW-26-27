@@ -65,7 +65,9 @@ def flight(monkeypatch, tmp_path):
     executor = Mock()
     executor.run.return_value = True
     monkeypatch.setattr(check_movement, "MissionExecutor", Mock(return_value=executor))
-    args = SimpleNamespace(log_dir=str(tmp_path), log_rate=10, altitude=3, side=5)
+    args = SimpleNamespace(
+        log_dir=str(tmp_path), log_rate=10, altitude=3, side=5, speed=None
+    )
     return px4, args, executor, events
 
 
@@ -179,3 +181,16 @@ def test_low_height_alone_does_not_pass_movement_recovery(flight, monkeypatch):
     px4.is_landed.return_value = False
     monkeypatch.setattr(check_movement.time, "monotonic", Mock(side_effect=[0, 61]))
     assert not check_movement.recover_flight(px4)
+
+
+def test_cli_passes_selected_speed_to_executor(flight, monkeypatch):
+    px4, args, _, _ = flight
+    monkeypatch.setattr(
+        "sys.argv",
+        ["check_movement", "--sitl", "--speed", "2", "--log-dir", args.log_dir],
+    )
+    monkeypatch.setattr(
+        check_movement, "run_main", lambda check, parsed: check(px4, parsed)
+    )
+    assert check_movement.main()
+    assert check_movement.MissionExecutor.call_args.kwargs["max_speed"] == 2.0

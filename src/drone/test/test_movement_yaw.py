@@ -30,7 +30,9 @@ def test_rotation_holds_position_and_wraps_heading_error():
     command = RotateTo(math.radians(179))
     assert command.start(px4, context, 0)
     assert context.last_target == (2, 4, 3)
-    assert command.update(px4, context, 0) is CommandStatus.DONE
+    assert command.update(px4, context, 0) is CommandStatus.RUNNING
+    assert command.update(px4, context, 1) is CommandStatus.RUNNING
+    assert command.update(px4, context, 1.2) is CommandStatus.DONE
 
 
 def test_yaw_persists_through_move_and_hold():
@@ -94,3 +96,32 @@ def test_default_mission_covers_commands_and_returns_to_start():
     assert rotations == [math.pi / 2, 0]
     assert mission[-1].point == (7, -4, 3.2)
     assert mission[-1].yaw == 0
+
+
+@pytest.mark.parametrize("direction", [-1, 1])
+def test_rotate_to_paces_shortest_arc_and_finishes_on_measured_heading(direction):
+    # A 90 degree turn across the wrap boundary, with an independent yaw measurement.
+    start = math.radians(direction * 150)
+    target = math.radians(direction * -120)
+    px4 = FakePX4(yaw=start)
+    px4.send_position_setpoint = Mock(wraps=px4.send_position_setpoint)
+    context = MissionContext(max_speed=1)
+    command = RotateTo(target)
+    assert command.start(px4, context, 0)
+    assert px4.send_position_setpoint.call_args.kwargs["yaw"] == pytest.approx(start)
+    # First 72 degrees at 30 deg/s, then 9 degrees at an average of 16.5 deg/s.
+    approach_start = 2.4 + 9 / 16.5
+    for t, expected_turn in [
+        (1, 30),
+        (2.4, 72),
+        (approach_start, 81),
+        (approach_start + 1, 84),
+        (approach_start + 3.01, 90),
+    ]:
+        assert command.update(px4, context, t) is CommandStatus.RUNNING
+        published = px4.send_position_setpoint.call_args.kwargs["yaw"]
+        turn = math.degrees(math.remainder(published - start, math.tau))
+        assert turn == pytest.approx(direction * expected_turn)
+    px4.yaw = target
+    assert command.update(px4, context, approach_start + 3.2) is CommandStatus.DONE
+    assert context.last_yaw == target
