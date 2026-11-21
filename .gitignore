@@ -14,3 +14,6 @@ __pycache__/
 
 # Telemetry CSVs written by check_movement
 flight_logs/
+
+# Personal Ubuntu 24.04 setup notes
+/docs/dev_setup_ubuntu24.md

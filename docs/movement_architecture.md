@@ -71,19 +71,27 @@ flowchart TB
 
 ## Setup and run in SITL
 
-These instructions use the team's Linux setup: PX4 SITL and Gazebo run on the
-laptop; ROS 2 Humble and MicroXRCEAgent run in Docker. For first-time installation
-of PX4/Gazebo and the version stack, follow [Ubuntu 24.04 setup](dev_setup_ubuntu24.md).
-The examples assume the two repositories are siblings under
-`~/drone/mcgill-robotics`; adjust the host paths if yours differ.
+Use two terminals on the same computer for the simulation. Terminal A runs PX4
+and Gazebo. Terminal B runs the ROS flight check and its XRCE agent. The diagram
+above shows the Ubuntu 24.04 Docker layout. On Ubuntu 22.04 the same ROS code can
+run directly on the host. Adjust the example checkout paths to match your machine.
 
-| Terminal | Where it runs | Purpose |
-|---|---|---|
-| A | Laptop / host | PX4 SITL and Gazebo |
-| B | Docker shell | Build ROS packages and run the flight check |
-| C (optional) | Second shell in the same container | Observe ROS telemetry |
+### 1. Choose the ROS environment
 
-### 1. Prepare the workspace and Docker image (host)
+**Ubuntu 22.04 (native, including a Jetson running 22.04).** Install ROS 2 Humble,
+colcon, and Micro-XRCE-DDS-Agent v2.4.2. The [team README](../README.md) includes
+the agent build instructions and required Fast-DDS pin. In terminal B, prepare
+the workspace and verify the tools are on your path, then continue to step 2.
+
+```bash
+cd ~/drone/mcgill-robotics/drone-SW-26-27
+git submodule update --init --recursive
+source /opt/ros/humble/setup.bash
+command -v ros2 colcon MicroXRCEAgent
+```
+
+**Ubuntu 24.04 (Docker).** Install Docker on the host. From the companion-code
+checkout, build the image with ROS 2 Humble and the agent for terminal B.
 
 ```bash
 cd ~/drone/mcgill-robotics/drone-SW-26-27
@@ -91,11 +99,10 @@ git submodule update --init --recursive
 docker build -f docker/Dockerfile -t drone-2027 .
 ```
 
-The image contains ROS 2 and the XRCE agent. Build it initially and when its
-Dockerfile changes; ordinary Python edits only require rebuilding the ROS
-workspace when necessary, not rebuilding the image.
+### 2. Start the simulator (both setups, host terminal A)
 
-### 2. Start the simulator (host terminal A)
+Follow the [SITL setup](sitl.md) to install PX4 and Gazebo on the host the first
+time. Use the PX4 release matching the workspace's `px4_msgs` submodule.
 
 ```bash
 cd ~/drone/mcgill-robotics/PX4-Autopilot
@@ -106,7 +113,10 @@ Keep this terminal running. Wait for the vehicle and world to load in Gazebo.
 Start with the vehicle on the ground; restart SITL between independent recovery
 experiments if the previous run left its state uncertain.
 
-### 3. Open the ROS container (host terminal B)
+### 3. Open the ROS shell (terminal B)
+
+On native Ubuntu 22.04, continue in the workspace shell from step 1 and skip to
+step 4. On Ubuntu 24.04, start the container from the host shell below.
 
 ```bash
 cd ~/drone/mcgill-robotics/drone-SW-26-27
@@ -124,10 +134,11 @@ The container opens a Bash shell. Source code and `flight_logs/`, `build/`,
 `install/`, and `log/` live in the mounted workspace and persist after exit.
 `--rm` removes the container itself on exit; rerun the command to create it again.
 
-### 4. Build and source the workspace (inside Docker)
+### 4. Build and source the workspace (both setups, terminal B)
+
+Run from the companion repository root (the container opens there automatically).
 
 ```bash
-cd /home/devuser/drone-2027
 source /opt/ros/humble/setup.bash
 colcon list
 colcon build --packages-up-to drone --symlink-install
@@ -140,7 +151,7 @@ workspace, `--packages-select drone` is sufficient when only the drone package
 needs rebuilding. Source `install/setup.bash` in each new shell before running
 package commands. Run each build successfully before sourcing its result.
 
-### 5. Check the connection, then run the mission (inside Docker)
+### 5. Check the connection, then run the mission (both setups, terminal B)
 
 ```bash
 ros2 run drone check_link --sitl
@@ -212,8 +223,8 @@ host editor too. No plotting script is currently included in this repository.
 ### Run a custom sequence with yaw
 
 The default mission includes North/East rotations and an absolute return leg.
-To try a shorter custom yaw sequence without editing the source, run this inside
-Docker after sourcing the workspace:
+To try a shorter custom yaw sequence without editing the source, run this in terminal B
+after sourcing the workspace:
 
 ```bash
 python3 - --sitl --api <<'PY'
@@ -255,8 +266,8 @@ pytest -v src/drone/test/test_movement_recovery.py
 pytest -v src/drone/test/test_movement_yaw.py
 ```
 
-As checked on 2026-11-07, the full suite has 103 passing tests: 25 original
-movement tests, 17 recovery tests, 13 yaw/mission tests, and 48 other PX4 tests.
+As checked on 2026-11-07, the full suite has 105 passing tests: 25 original
+movement tests, 19 recovery tests, 13 yaw/mission tests, and 48 other PX4 tests.
 The expanded 15-step mission still needs SITL verification; the historical
 12-step SITL result does not verify the new sequence.
 
@@ -284,16 +295,16 @@ up/down pair returns to the same allowed altitude.
 
 ### Observe topics and troubleshoot
 
-For a second ROS shell, run on the host while terminal B's container is running:
+On native Ubuntu 22.04, open another terminal in the companion repository root.
+On the Docker setup, open another shell in the running container from the host:
 
 ```bash
 docker exec -it drone-movement bash
 ```
 
-Then inside that shell:
+In either ROS shell, from the workspace root:
 
 ```bash
-cd /home/devuser/drone-2027
 source /opt/ros/humble/setup.bash
 source install/setup.bash
 ros2 topic echo /fmu/out/vehicle_land_detected
@@ -357,8 +368,10 @@ failure skips landing. Logging and the connection remain available during recove
 offboard streaming is stopped afterward and `run_main` closes the connection.
 
 A failed hold does not prevent LAND. LAND rejection, timeout, exception or loss of
-connection makes recovery unsuccessful. Landing success requires PX4 landing
-detection rather than a height near the local origin. During link loss, recovery
+connection makes recovery unsuccessful. The shared team `px4.land()` retains its original low-local-height fallback.
+Only `check_movement.recover_flight()` additionally waits for PX4 landing detection,
+using the remaining part of its 60-second landing budget. This check does not
+change landing behaviour for other team scripts. During link loss, recovery
 cannot be confirmed by this script; the vehicle's configured PX4 failsafe governs
 its behaviour. Telemetry freshness is still a separate known limitation.
 

@@ -275,7 +275,10 @@ class CommandsMixin:
             if self.is_landed():
                 print("[PX4] Landing complete, vehicle reports landed")
                 return True
-            # Local-origin height alone does not establish touchdown.
+            loc = self.get_location()
+            if loc and loc["z"] < 0.1:
+                print(f"[PX4] Landing complete, reached {loc['z']:.2f}m")
+                return True
             time.sleep(0.5)
 
         print("[PX4] Landing timeout")

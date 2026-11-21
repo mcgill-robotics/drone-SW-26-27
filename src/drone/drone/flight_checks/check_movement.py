@@ -137,10 +137,22 @@ def recover_flight(px4):
     except Exception as exc:
         print(f"[CHECK] Recovery hold failed: {exc}")
     try:
-        landed = px4.land(timeout=60)
-        if not landed:
+        deadline = time.monotonic() + 60
+        if not px4.land(timeout=60):
             print("[CHECK] Landing unconfirmed: LAND failed or timed out")
-        return landed
+            return False
+        # The shared land() also accepts low local height. For this flight check,
+        # require touchdown telemetry without changing other callers' behaviour.
+        while True:
+            if not px4.connected:
+                print("[CHECK] Connection lost; touchdown unconfirmed")
+                return False
+            if px4.is_landed():
+                return True
+            if time.monotonic() >= deadline:
+                print("[CHECK] Landing unconfirmed: no touchdown detection")
+                return False
+            time.sleep(0.5)
     except Exception as exc:
         print(f"[CHECK] Landing unconfirmed: {type(exc).__name__}: {exc}")
         return False

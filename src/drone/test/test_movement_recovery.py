@@ -163,3 +163,19 @@ def test_command_failure_survives_hold_exception():
     assert not executor.run()
     assert executor.state is MissionState.FAILED
     assert executor.results[0].reason == "ValueError: original failure"
+
+
+def test_recovery_waits_for_touchdown_after_shared_land_returns(flight, monkeypatch):
+    px4, _, _, _ = flight
+    px4.is_landed.side_effect = [False, True]
+    sleep = Mock()
+    monkeypatch.setattr(check_movement.time, "sleep", sleep)
+    assert check_movement.recover_flight(px4)
+    sleep.assert_called_once_with(0.5)
+
+
+def test_low_height_alone_does_not_pass_movement_recovery(flight, monkeypatch):
+    px4, _, _, _ = flight
+    px4.is_landed.return_value = False
+    monkeypatch.setattr(check_movement.time, "monotonic", Mock(side_effect=[0, 61]))
+    assert not check_movement.recover_flight(px4)
